@@ -1,202 +1,243 @@
-# SMPL LBS Lab — Linear Blend Skinning Visualization
+# SMPL LBS 实验 — 线性混合蒙皮过程可视化
 
-> A step-by-step dissection and visualization of the SMPL Linear Blend Skinning pipeline, with manual reimplementation and official forward-pass verification.
-
----
-
-## Overview
-
-This project implements a complete **manual LBS (Linear Blend Skinning)** pipeline based on the [SMPL](https://smpl.is.tue.mpg.de/) parametric human body model. It extracts every intermediate quantity from the official `lbs()` function and renders them as 3D visualizations at four key stages of the pipeline. The manual implementation is then numerically verified against the official SMPL forward pass.
-
-## Objectives
-
-1. Understand the relationships among the template mesh, shape parameters (`β`), pose parameters (`θ`), joint regressor, and skinning weights in a parametric body model.
-2. Internalize the four stages of LBS:
-   - **(a)** Template mesh `T̄` with skinning weights `W`
-   - **(b)** Shape-corrected mesh `T̄ + B_S(β)` with regressed joints `J(β)`
-   - **(c)** Pose-corrected mesh `T_P(β,θ) = T̄ + B_S(β) + B_P(θ)`
-   - **(d)** Final skinned result after LBS
-3. Call the SMPL model and manually extract + visualize the key intermediate tensors that the official `lbs()` implementation produces internally.
+> 基于 SMPL 参数化人体模型的 LBS（Linear Blend Skinning）完整拆解与可视化实验，包含手写实现与官方前向结果的一致性验证。
 
 ---
 
-## Core Architecture: The 4-Stage LBS Pipeline
+## 实验概述
 
-### Stage (a) — Template Mesh & Skinning Weights
+本项目基于 [SMPL](https://smpl.is.tue.mpg.de/) 参数化人体模型，**手写实现了完整的 LBS 蒙皮流水线**，将官方 `lbs()` 函数中的每一个关键中间量单独提取出来，分别在四个阶段进行 3D 可视化渲染。最后将手写实现的结果与官方前向传播进行数值对比验证。
 
-```
-T̄  (N_V × 3)         →  template vertices in rest pose (T-pose)
-W  (N_V × K)          →  skinning weight of each vertex w.r.t. each joint
-```
+## 实验目标
 
-- The template `T̄` is the neutral human mesh in T-pose (6890 vertices, 13776 faces).
-- `W` is a matrix of per-vertex, per-joint influence weights (24 joints for SMPL). Each row sums to 1.
-- At this point the mesh has **not** adopted any body shape or pose — but every vertex already knows which skeletal joints it will follow.
+1. 理解参数化人体模型中模板网格、形状参数（`β`）、姿态参数（`θ`）、关节回归器和蒙皮权重之间的关系。
+2. 掌握 LBS 的四个阶段：
+   - **(a)** 模板网格 `T̄` 与蒙皮权重 `W`
+   - **(b)** 形状校正后网格 `T̄ + B_S(β)` 以及回归关节 `J(β)`
+   - **(c)** 姿态校正后网格 `T_P(β,θ) = T̄ + B_S(β) + B_P(θ)`
+   - **(d)** 经过 LBS 之后的最终蒙皮结果
+3. 学会调用 SMPL 模型，并把官方 `lbs()` 实现中的关键中间量单独提取出来做可视化。
 
-### Stage (b) — Shape Blend & Joint Regression
+---
 
-```
-v_shaped = T̄ + B_S(β)                     // β ∈ R^{10}: shape coefficients
-J        = J_regressor(v_shaped)           // 24 joints regressed from shaped mesh
-```
+## 核心架构：四阶段 LBS 流水线
 
-- `β` encodes body identity (height, weight, shoulder width, etc.) via a linear blend shape basis (`shapedirs`).
-- `B_S(β) = blend_shapes(β, shapedirs)` adds these displacements to the template.
-- Joint positions `J` are **not** constants — they are regressed from the shaped vertices via `vertices2joints(J_regressor, v_shaped)`. A heavier person's hip joints sit at different world positions than a thinner person's.
-
-### Stage (c) — Pose Blend Shapes
+### 阶段 (a) — 模板网格与蒙皮权重
 
 ```
-full_pose     = cat(global_orient, body_pose)      // [1, 72]  axis-angle
+T̄  (N_V × 3)         →  T-pose 下的模板顶点
+W  (N_V × K)          →  每个顶点对各关节的蒙皮权重
+```
+
+- 模板 `T̄` 是处于 T-pose 的中性人体网格（6890 个顶点，13776 个面片）。
+- `W` 是顶点-关节权重矩阵（SMPL 共 24 个关节），每行之和为 1。
+- 此时网格**尚未**根据人物体型改变，也**尚未**根据姿态弯曲——但每个顶点已经知道"将来应该主要跟着哪些骨骼走"。
+
+### 阶段 (b) — 形状校正与关节回归
+
+```
+v_shaped = T̄ + B_S(β)                     // β ∈ R¹⁰：形状系数
+J        = J_regressor(v_shaped)           // 从校正后网格回归出 24 个关节
+```
+
+- `β` 通过线性形变基（`shapedirs`）编码人物体型（高矮、胖瘦、肩宽等）。
+- `B_S(β) = blend_shapes(β, shapedirs)` 将这些位移叠加到模板上。
+- 关节位置 `J` **不是固定常数**——它通过 `vertices2joints(J_regressor, v_shaped)` 从体型变化后的网格回归得到。体型的改变会导致关节位置相应移动。
+
+### 阶段 (c) — 姿态校正
+
+```
+full_pose     = cat(global_orient, body_pose)      // [1, 72]  轴角表示
 rot_mats      = batch_rodrigues(full_pose)          // [1, 24, 3, 3]
-pose_feature  = flatten(rot_mats[:, 1:, :, :] − I)  // deviation from identity
+pose_feature  = flatten(rot_mats[:, 1:, :, :] − I)  // 旋转矩阵偏离单位阵的程度
 pose_offsets  = matmul(pose_feature, posedirs)       // [1, N_V, 3]
 v_posed       = v_shaped + pose_offsets
 ```
 
-- Before binding vertices to bones, SMPL adds **pose-dependent corrective offsets** (`B_P(θ)`) to handle non-rigid deformations near bending joints (shoulders, elbows, knees).
-- `pose_feature` is the deviation of each joint's rotation matrix from the identity — this encodes *how much* each joint is bent.
-- `posedirs` maps these deviations to vertex displacements via a linear model.
-- **v_posed is NOT the final result** — the mesh has been deformed, but has not yet been bound to the skeleton.
+- 在将顶点真正绑定到骨骼之前，SMPL 会加入**姿态相关的校正偏移**（`B_P(θ)`），以处理关节弯曲处（肩、肘、膝）的额外几何变化——这些仅靠骨骼刚体旋转无法表达。
+- `pose_feature` 是每个关节旋转矩阵与单位阵的偏差，编码了关节弯曲的*幅度*。
+- `posedirs` 将该偏差通过线性模型映射为顶点位移。
+- **v_posed 还不是最终结果**——网格虽已变形，但尚未绑定到骨骼上。
 
-### Stage (d) — Linear Blend Skinning
+### 阶段 (d) — 线性混合蒙皮
 
 ```
 J_transformed, A = batch_rigid_transform(rot_mats, J, parents)
-T                 = matmul(W, A)                     // per-vertex 4×4 transform
-v_homo            = [v_posed; 1]                     // homogeneous coordinates
-verts             = T · v_homo                        // final skinned vertices
+T                 = matmul(W, A)                     // 每个顶点一个 4×4 变换矩阵
+v_homo            = [v_posed; 1]                     // 齐次坐标
+verts             = T · v_homo                        // 最终蒙皮顶点
 ```
 
-- `batch_rigid_transform` walks the kinematic tree (defined by `parents`) to compute the **global** rigid transform `G_k` for each joint.
-- Each vertex's final transform `T_i` is a *weighted blend* of the global transforms of the joints that influence it:
+- `batch_rigid_transform` 沿运动学树（由 `parents` 定义）为每个关节计算**全局**刚体变换 `G_k`。
+- 每个顶点的最终变换 `T_i` 是影响它的多个关节全局变换的*加权混合*：
   ```
   v_i′ = Σ_{k=1}^{K}  w_{ik} · G_k · [v_i^{posed}; 1]
   ```
-- This is why it is called **Linear Blend Skinning**: each vertex does not follow a single bone, but blends across multiple bone transforms with weighted averaging.
+- 这也就是 **Linear Blend Skinning** 名字的来源：每个顶点不是只跟着一个骨骼走，而是跟着多个关节做加权平均后的变换。
 
-### Five Core Variables
+### 五个核心变量
 
-| Variable | Shape | Meaning |
+| 变量 | 维度 | 含义 |
 |---|---|---|
-| `v_template` | [N_V, 3] | Raw template mesh in T-pose |
-| `v_shaped` | [N_V, 3] | Template + shape-dependent deformation |
-| `J` | [K, 3] | Joint positions regressed from v_shaped |
-| `v_posed` | [N_V, 3] | v_shaped + pose-dependent corrective offsets |
-| `verts` | [N_V, 3] | Final skinned mesh after LBS |
+| `v_template` | [N_V, 3] | T-pose 下的原始模板网格 |
+| `v_shaped` | [N_V, 3] | 模板 + 形状相关形变 |
+| `J` | [K, 3] | 由 v_shaped 回归得到的关节位置 |
+| `v_posed` | [N_V, 3] | v_shaped + 姿态相关校正偏移 |
+| `verts` | [N_V, 3] | 经过 LBS 之后的最终蒙皮网格 |
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```
 Tzz8/
-├── run_lbs_lab.py                       # Main script (manual LBS + visualization + verification)
-├── outputs/                             # All generated outputs
-│   ├── stage_a_template_weights.png     # Template mesh with joint-weight heatmap
-│   ├── all_joint_weights.png            # Per-face dominant-joint coloring (optional)
-│   ├── stage_b_shaped_joints.png        # Shape-corrected mesh + regressed joints
-│   ├── stage_c_pose_offsets.png         # Pose-corrected mesh (colored by offset magnitude)
-│   ├── stage_d_lbs_result.png           # Final skinned mesh + transformed joints
-│   ├── comparison_grid.png              # 2×2 grid comparing all four stages
-│   └── summary.txt                      # Model metadata + numerical verification
+├── run_lbs_lab.py                       # 主脚本（手动 LBS + 可视化 + 验证）
+├── outputs/                             # 所有生成结果
+│   ├── stage_a_template_weights.png     # 模板网格 + 单关节权重热力图
+│   ├── all_joint_weights.png            # 每面片主导关节分布图（可选）
+│   ├── stage_b_shaped_joints.png        # 形状校正后网格 + 回归关节点
+│   ├── stage_c_pose_offsets.png         # 姿态校正网格（按偏移量着色）
+│   ├── stage_d_lbs_result.png           # 最终蒙皮网格 + 变换后关节
+│   ├── comparison_grid.png              # 四阶段 2×2 对比图
+│   └── summary.txt                      # 模型元信息 + 数值验证结果
 ├── .gitignore
 └── README.md
 ```
 
-> **Note:** The SMPL model file (`SMPL_NEUTRAL.pkl`) is **not** included in this repository. Download it from [smpl.is.tue.mpg.de](https://smpl.is.tue.mpg.de/).
+> **注意：** SMPL 模型文件（`SMPL_NEUTRAL.pkl`）**不包含**在本仓库中。请从 [smpl.is.tue.mpg.de](https://smpl.is.tue.mpg.de/) 下载。
 
 ---
 
-## Dependencies
+## 环境依赖
 
 ```bash
 pip install torch numpy matplotlib smplx
 ```
 
-| Package | Purpose |
+| 包 | 用途 |
 |---|---|
-| `torch` | Tensor computation |
-| `numpy` | Numerical operations |
-| `matplotlib` | 3D mesh rendering |
-| `smplx` | SMPL model loading and official forward pass |
+| `torch` | 张量计算 |
+| `numpy` | 数值运算 |
+| `matplotlib` | 3D 网格渲染 |
+| `smplx` | SMPL 模型加载与官方前向传播 |
 
 ---
 
-## Quick Start
+## 快速开始
 
 ```bash
-# 1. Clone the repository
+# 1. 克隆仓库
 git clone https://github.com/yaqingtang666-lab/Tzz8.git
 cd Tzz8
 
-# 2. Install dependencies
+# 2. 安装依赖
 pip install torch numpy matplotlib smplx
 
-# 3. Place SMPL_NEUTRAL.pkl under ./models/smpl/
+# 3. 将 SMPL_NEUTRAL.pkl 放置到 ./models/smpl/ 目录下
 
-# 4. Run the lab
+# 4. 运行实验
 python run_lbs_lab.py --model-dir ./models --out-dir ./outputs --joint-id 18 --num-betas 10
 ```
 
-### Command-Line Arguments
+### 命令行参数
 
-| Argument | Default | Description |
+| 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--model-dir` | `./models` | Directory containing `smpl/SMPL_NEUTRAL.pkl` |
-| `--out-dir` | `./outputs` | Output directory for images and summary |
-| `--joint-id` | `18` | Joint index to visualize in stage (a) heatmap |
-| `--num-betas` | `10` | Number of shape parameters to use |
+| `--model-dir` | `./models` | 包含 `smpl/SMPL_NEUTRAL.pkl` 的目录 |
+| `--out-dir` | `./outputs` | 输出图片与摘要文件的目录 |
+| `--joint-id` | `18` | 阶段 (a) 中可视化权重的关节编号 |
+| `--num-betas` | `10` | 使用的形状参数个数 |
 
 ---
 
-## Verification Results
+## 验证结果
 
-The manual LBS implementation was verified against the official SMPL forward pass with identical inputs:
+在与官方前向传播使用完全相同输入的前提下，对手写 LBS 实现进行了逐顶点数值对比：
 
 ```
 manual_vs_official_mean_abs_error: 0.0000000000
 manual_vs_official_max_abs_error:  0.0000000000
 ```
 
-Both errors are zero to the precision of `float32`, confirming that the hand-written pipeline is **numerically identical** to the official `smplx` implementation.
+两项误差均精确为 0（`float32` 精度范围内），说明手写流水线与官方 `smplx` 实现在数值上**完全一致**。
 
-### Model Statistics
+### 模型基础信息
 
-| Property | Value |
+| 属性 | 数值 |
 |---|---|
-| Vertices | 6890 |
-| Faces | 13776 |
-| Joints | 24 |
-| Shape params (`β`) | 10 |
+| 顶点数 | 6890 |
+| 面片数 | 13776 |
+| 关节数 | 24 |
+| 形状参数（`β`）维度 | 10 |
 
 ---
 
-## Key Design Decisions
+## 关键设计决策
 
-1. **`_ChumpyArrayShim`** — A minimal pickle compatibility shim that allows loading legacy SMPL `.pkl` files *without* installing the deprecated `chumpy` package. This works by registering a fake `chumpy.ch` module that reconstructs numpy arrays from the pickled object's internal state.
+1. **`_ChumpyArrayShim`**—— 一个轻量级 pickle 兼容层，允许在**不安装**已废弃的 `chumpy` 包的情况下加载旧版 SMPL `.pkl` 文件。通过注册一个伪造的 `chumpy.ch` 模块，从被 pickle 对象的内部状态重建 numpy 数组来实现。
 
-2. **`prepare_posedirs`** — Some SMPL variants store `posedirs` in transposed shapes (e.g., `[V×3, P]` instead of `[P, V×3]`). This helper detects the shape and transposes if needed to ensure compatibility with the official `lbs()` convention.
+2. **`prepare_posedirs`**—— 某些 SMPL 变体可能以转置形式存储 `posedirs`（如 `[V×3, P]` 而非 `[P, V×3]`）。该辅助函数自动检测形状并在必要时进行转置，确保与官方 `lbs()` 的约定一致。
 
-3. **Coordinate system transform** — SMPL uses a Y-up coordinate system, while matplotlib uses Z-up. The helper `smpl_to_plot_coords` swaps Y and Z axes for correct 3D rendering.
+3. **坐标系转换**—— SMPL 使用 Y-up 坐标系，而 matplotlib 使用 Z-up。辅助函数 `smpl_to_plot_coords` 交换 Y 轴与 Z 轴，保证 3D 渲染方向正确。
 
 ---
 
-## Output Visualizations
+## 输出可视化说明
 
-| File | Description |
+| 文件 | 说明 |
 |---|---|
-| `stage_a_template_weights.png` | T-pose mesh with per-vertex heatmap showing skinning weight for a single joint |
-| `all_joint_weights.png` | Each face colored by its dominant (max-weight) joint — shows global joint influence regions |
-| `stage_b_shaped_joints.png` | Body shape changed via `β`; white dots are regressed joint positions |
-| `stage_c_pose_offsets.png` | Pose-corrected mesh colored by `|pose_offsets|` — hotter colors = larger corrective displacements near bending joints |
-| `stage_d_lbs_result.png` | Final skinned mesh in target pose with transformed joints |
-| `comparison_grid.png` | 2×2 overview of all four pipeline stages side by side |
+| `stage_a_template_weights.png` | T-pose 网格 + 单个关节的蒙皮权重热力图（颜色越亮表示该关节对该区域影响越强） |
+| `all_joint_weights.png` | 每个面片按主导关节着色 —— 展示全局关节影响区域分布 |
+| `stage_b_shaped_joints.png` | 通过 `β` 改变体型后的网格，白色圆点为回归出的关节点位置 |
+| `stage_c_pose_offsets.png` | 按 `|pose_offsets|` 着色的姿态校正网格 —— 热色区域对应弯曲关节附近的额外几何修正 |
+| `stage_d_lbs_result.png` | 目标姿态下的最终蒙皮网格与变换后的关节 |
+| `comparison_grid.png` | 四阶段 2×2 并排对比图，直观展示流水线演变过程 |
 
 ---
 
-## References
+## 实验任务对应关系
+
+本实验包含 7 项任务，均已在 `run_lbs_lab.py` 中实现：
+
+| 任务 | 内容 | 对应输出 |
+|---|---|---|
+| 任务 1 | 加载 SMPL 并输出基础信息 | 控制台打印 + `summary.txt` |
+| 任务 2 | 可视化模板网格与蒙皮权重 | `stage_a_template_weights.png`、`all_joint_weights.png` |
+| 任务 3 | 可视化形状校正与关节回归 | `stage_b_shaped_joints.png` |
+| 任务 4 | 可视化姿态校正 `B_P(θ)` | `stage_c_pose_offsets.png` |
+| 任务 5 | 可视化完整 LBS 结果 | `stage_d_lbs_result.png` |
+| 任务 6 | 生成四阶段总对比图 | `comparison_grid.png` |
+| 任务 7 | 手写 LBS 与官方前向一致性验证 | `summary.txt` |
+
+---
+
+## 思考题
+
+以下思考题对应各阶段任务中的关键概念理解：
+
+**阶段 (a)：**
+- 为什么一个顶点不只受一个关节影响？
+- 如果一个顶点的权重几乎全给了某一个关节，会出现什么效果？
+- 如果权重分布很平均，又会出现什么效果？
+
+**阶段 (b)：**
+- 为什么关节位置要从形状后的网格回归，而不是固定不变？
+- 如果人物变胖/变瘦，肩、膝、髋等关节的大致位置会不会变化？
+- `v_template` 与 `v_shaped` 的差别是什么？
+
+**阶段 (c)：**
+- 为什么 LBS 之前还要加 pose corrective？
+- 如果去掉 `pose_offsets`，最终人体弯曲处会出现什么问题？
+- `v_shaped` 与 `v_posed` 的本质区别是什么？
+
+**阶段 (d)：**
+- `J` 和 `J_transformed` 有什么区别？
+- 为什么最终顶点要写成加权和，而不是只选择最大权重的关节？
+
+---
+
+## 参考文献
 
 - Loper, M., Mahmood, N., Romero, J., Pons-Moll, G., & Black, M. J. (2015). **SMPL: A Skinned Multi-Person Linear Model**. *ACM Transactions on Graphics (TOG)*, 34(6), 248.
-- Official SMPL website: [https://smpl.is.tue.mpg.de/](https://smpl.is.tue.mpg.de/)
-- SMPL-X Python library: [https://github.com/vchoutas/smplx](https://github.com/vchoutas/smplx)
+- SMPL 官网：[https://smpl.is.tue.mpg.de/](https://smpl.is.tue.mpg.de/)
+- SMPL-X Python 库：[https://github.com/vchoutas/smplx](https://github.com/vchoutas/smplx)
