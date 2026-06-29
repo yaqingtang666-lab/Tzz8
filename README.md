@@ -6,13 +6,8 @@
 
 ## 实验目标
 
-1. 理解参数化人体模型中模板网格、形状参数（`β`）、姿态参数（`θ`）、关节回归器和蒙皮权重之间的关系。
-2. 掌握 LBS 的四个阶段：
-   - **(a)** 模板网格 `T̄` 与蒙皮权重 `W`
-   - **(b)** 形状校正后网格 `T̄ + B_S(β)` 以及回归关节 `J(β)`
-   - **(c)** 姿态校正后网格 `T_P(β,θ) = T̄ + B_S(β) + B_P(θ)`
-   - **(d)** 经过 LBS 之后的最终蒙皮结果
-3. 学会调用 SMPL 模型，并把官方 `lbs()` 实现中的关键中间量单独提取出来做可视化。
+1. 理解参数化人体模型中模板网格、形状参数（β）、姿态参数（θ）、关节回归器和蒙皮权重之间的关系。
+2. 掌握 LBS 的四个阶段
 
 ---
 
@@ -100,50 +95,6 @@ Tzz8/
 └── README.md
 ```
 
-> **注意：** SMPL 模型文件（`SMPL_NEUTRAL.pkl`）**不包含**在本仓库中。请从 [smpl.is.tue.mpg.de](https://smpl.is.tue.mpg.de/) 下载。
-
----
-
-## 环境依赖
-
-```bash
-pip install torch numpy matplotlib smplx
-```
-
-| 包 | 用途 |
-|---|---|
-| `torch` | 张量计算 |
-| `numpy` | 数值运算 |
-| `matplotlib` | 3D 网格渲染 |
-| `smplx` | SMPL 模型加载与官方前向传播 |
-
----
-
-## 快速开始
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/yaqingtang666-lab/Tzz8.git
-cd Tzz8
-
-# 2. 安装依赖
-pip install torch numpy matplotlib smplx
-
-# 3. 将 SMPL_NEUTRAL.pkl 放置到 ./models/smpl/ 目录下
-
-# 4. 运行实验
-python run_lbs_lab.py --model-dir ./models --out-dir ./outputs --joint-id 18 --num-betas 10
-```
-
-### 命令行参数
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--model-dir` | `./models` | 包含 `smpl/SMPL_NEUTRAL.pkl` 的目录 |
-| `--out-dir` | `./outputs` | 输出图片与摘要文件的目录 |
-| `--joint-id` | `18` | 阶段 (a) 中可视化权重的关节编号 |
-| `--num-betas` | `10` | 使用的形状参数个数 |
-
 ---
 
 ## 验证结果
@@ -182,12 +133,18 @@ manual_vs_official_max_abs_error:  0.0000000000
 
 | 文件 | 说明 |
 |---|---|
-| `stage_a_template_weights.png` | T-pose 网格 + 单个关节的蒙皮权重热力图（颜色越亮表示该关节对该区域影响越强） |
-| `all_joint_weights.png` | 每个面片按主导关节着色 —— 展示全局关节影响区域分布 |
-| `stage_b_shaped_joints.png` | 通过 `β` 改变体型后的网格，白色圆点为回归出的关节点位置 |
-| `stage_c_pose_offsets.png` | 按 `|pose_offsets|` 着色的姿态校正网格 —— 热色区域对应弯曲关节附近的额外几何修正 |
-| `stage_d_lbs_result.png` | 目标姿态下的最终蒙皮网格与变换后的关节 |
-| `comparison_grid.png` | 四阶段 2×2 并排对比图，直观展示流水线演变过程 |
+| `stage_a_template_weights.png` <img width="1077" height="1119" alt="stage_a_template_weights" src="https://github.com/user-attachments/assets/8a4a2f37-01b1-4db0-a5b8-fb09933d4ebc" />
+| T-pose 网格 + 单个关节的蒙皮权重热力图（颜色越亮表示该关节对该区域影响越强） |
+| `all_joint_weights.png`<img width="1517" height="1559" alt="all_joint_weights" src="https://github.com/user-attachments/assets/d44d3b42-7179-4155-8516-1b72e596b2bb" />
+ | 每个面片按主导关节着色 —— 展示全局关节影响区域分布 |
+| `stage_b_shaped_joints.png`<img width="1077" height="1119" alt="stage_b_shaped_joints" src="https://github.com/user-attachments/assets/c139d170-e0ee-4892-b0de-4193dc14126f" />
+ | 通过 `β` 改变体型后的网格，白色圆点为回归出的关节点位置 |
+| `stage_c_pose_offsets.png`<img width="1077" height="1119" alt="stage_c_pose_offsets" src="https://github.com/user-attachments/assets/cf9a7f5c-f4dc-4495-8814-f8b3c4317bec" />
+ | 按 `|pose_offsets|` 着色的姿态校正网格 —— 热色区域对应弯曲关节附近的额外几何修正 |
+| `stage_d_lbs_result.png`<img width="1077" height="1119" alt="stage_d_lbs_result" src="https://github.com/user-attachments/assets/354255bc-13d3-43e6-a414-549e9444c57a" />
+ | 目标姿态下的最终蒙皮网格与变换后的关节 |
+| `comparison_grid.png`<img width="2417" height="2176" alt="comparison_grid" src="https://github.com/user-attachments/assets/0f100af0-8f24-4ef5-9b49-6c5f0eb7a2e4" />
+ | 四阶段 2×2 并排对比图，直观展示流水线演变过程 |
 
 ---
 
@@ -206,34 +163,3 @@ manual_vs_official_max_abs_error:  0.0000000000
 | 任务 7 | 手写 LBS 与官方前向一致性验证 | `summary.txt` |
 
 ---
-
-## 思考题
-
-以下思考题对应各阶段任务中的关键概念理解：
-
-**阶段 (a)：**
-- 为什么一个顶点不只受一个关节影响？
-- 如果一个顶点的权重几乎全给了某一个关节，会出现什么效果？
-- 如果权重分布很平均，又会出现什么效果？
-
-**阶段 (b)：**
-- 为什么关节位置要从形状后的网格回归，而不是固定不变？
-- 如果人物变胖/变瘦，肩、膝、髋等关节的大致位置会不会变化？
-- `v_template` 与 `v_shaped` 的差别是什么？
-
-**阶段 (c)：**
-- 为什么 LBS 之前还要加 pose corrective？
-- 如果去掉 `pose_offsets`，最终人体弯曲处会出现什么问题？
-- `v_shaped` 与 `v_posed` 的本质区别是什么？
-
-**阶段 (d)：**
-- `J` 和 `J_transformed` 有什么区别？
-- 为什么最终顶点要写成加权和，而不是只选择最大权重的关节？
-
----
-
-## 参考文献
-
-- Loper, M., Mahmood, N., Romero, J., Pons-Moll, G., & Black, M. J. (2015). **SMPL: A Skinned Multi-Person Linear Model**. *ACM Transactions on Graphics (TOG)*, 34(6), 248.
-- SMPL 官网：[https://smpl.is.tue.mpg.de/](https://smpl.is.tue.mpg.de/)
-- SMPL-X Python 库：[https://github.com/vchoutas/smplx](https://github.com/vchoutas/smplx)
